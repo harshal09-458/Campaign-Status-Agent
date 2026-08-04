@@ -1,0 +1,27 @@
+{
+  "_comment": "Each client maps to alias keywords matched case-insensitively (word-boundary) against Iterable/Poplar campaign names. Add new aliases here as new clients/naming variants show up in the data — this file is expected to grow.",
+  "clients": [
+    { "client": "PRISM", "aliases": ["prism"] },
+    { "client": "Zachry", "aliases": ["zachry"] },
+    { "client": "City of Fort Worth", "aliases": ["city of fw", "fort worth", "fortworth"] },
+    { "client": "AAA", "aliases": ["aaa"] },
+    { "client": "Elbit", "aliases": ["elbit"] },
+    { "client": "Vericast", "aliases": ["vericast"] },
+    { "client": "Dexter", "aliases": ["dexter"] },
+    { "client": "West Fargo", "aliases": ["west fargo"] },
+    { "client": "NAEBT", "aliases": ["naebt", "northwest arizona employee benefit trust"] },
+    { "client": "CCT", "aliases": ["cct", "cochise combined trust"] },
+    { "client": "GEICO", "aliases": ["geico"] },
+    { "client": "Dexcom", "aliases": ["dexcom"] },
+    { "client": "KeHE", "aliases": ["kehe"] },
+    { "client": "NDPHIT", "aliases": ["ndphit"] },
+    { "client": "Evry", "aliases": ["evry"] },
+    { "client": "Silgan", "aliases": ["silgan"] },
+    { "client": "AZLGEBT", "aliases": ["azlgebt"] },
+    { "client": "RAGHT", "aliases": ["raght"] },
+    { "client": "FRP", "aliases": ["frp"] },
+    { "client": "Mohave County (MCEBT)", "aliases": ["mohave", "mcebt"] },
+    { "client": "SSCGP (Southern Star)", "aliases": ["sscgp", "southern star"] },
+    { "client": "Weston", "aliases": ["weston"] }
+  ]
+}

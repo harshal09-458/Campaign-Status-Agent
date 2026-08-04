@@ -1,0 +1,27 @@
+{
+  "_comment": "Maps each client_roster.json client name to the Slack channel it posts to. Channel names/IDs found via slack_search_channels on 2026-08-04. Update if a channel is renamed or a new client is added to the roster.",
+  "channels": {
+    "PRISM": { "channel_name": "prism-marketing", "channel_id": "C08KKHD6WTB" },
+    "Zachry": { "channel_name": "zachry-marketing", "channel_id": "C09AZ50US7L" },
+    "City of Fort Worth": { "channel_name": "city-of-fortworth-marketing", "channel_id": "C08MBTT937V" },
+    "AAA": { "channel_name": "aaa-marketing", "channel_id": "C09D9PYV056" },
+    "Elbit": { "channel_name": "elbit-marketing", "channel_id": "C09R00DM3GU" },
+    "Vericast": { "channel_name": "vericast-marketing", "channel_id": "C09P7S8M5JB" },
+    "Dexter": { "channel_name": "dexter-marketing", "channel_id": "C09Q85THMPA" },
+    "West Fargo": { "channel_name": "westfargo-marketing", "channel_id": "C0AQ4PBRA4B" },
+    "NAEBT": { "channel_name": "naebt-marketing", "channel_id": "C0AQ943RRAS" },
+    "CCT": { "channel_name": "cct-marketing", "channel_id": "C0AR5EU5Q5N" },
+    "GEICO": { "channel_name": "geico-marketing", "channel_id": "C0BAM6NDY49" },
+    "Dexcom": { "channel_name": "dexcom-marketing", "channel_id": "C07465A2T2T" },
+    "KeHE": { "channel_name": "kehe-marketing", "channel_id": "C07G1B4KNAV" },
+    "NDPHIT": { "channel_name": "ndphit-marketing", "channel_id": "C074P8C0H6G" },
+    "Evry": { "channel_name": "evryhealth-marketing", "channel_id": "C09JX7U65E3" },
+    "Silgan": { "channel_name": "silgan-marketing", "channel_id": "C074P7J11T6" },
+    "AZLGEBT": { "channel_name": "azlgebt-marketing", "channel_id": "C08K6JNRZ70" },
+    "RAGHT": { "channel_name": "raght-marketing", "channel_id": "C08L0K8K6GG" },
+    "FRP": { "channel_name": "frp-marketing", "channel_id": "C074LJZ6NNP" },
+    "Mohave County (MCEBT)": { "channel_name": "mohave-county-marketing", "channel_id": "C08RK7V70TE" },
+    "SSCGP (Southern Star)": { "channel_name": "sscgp-marketing", "channel_id": "C074LJ5RVS7" },
+    "Weston": { "channel_name": "weston-marketing", "channel_id": "C074ZDLN2EM" }
+  }
+}
