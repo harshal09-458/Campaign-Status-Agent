@@ -1,0 +1,44 @@
+name: Daily Campaign Status
+
+# Runs the Post Campaign Status pipeline (see workflows/post_campaign_status.md)
+# on GitHub's servers, so it fires daily regardless of whether the local Mac
+# (previously the only runner, via launchd) is on. 04:30 UTC = 10:00 AM IST.
+on:
+  schedule:
+    - cron: '30 4 * * *'
+  workflow_dispatch:
+    inputs:
+      post_to_slack:
+        description: 'Actually post to Slack (uncheck for a dry test run of the fetch/compose steps only)'
+        type: boolean
+        default: true
+
+jobs:
+  post-campaign-status:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Write .env from repo secrets
+        run: |
+          cat <<EOF > .env
+          ITERABLE_API_KEY=${{ secrets.ITERABLE_API_KEY }}
+          POPLAR_API_KEY=${{ secrets.POPLAR_API_KEY }}
+          SLACK_BOT_TOKEN=${{ secrets.SLACK_BOT_TOKEN }}
+          EOF
+
+      - name: Fetch Iterable sends (last 24h)
+        run: python3 tools/fetch_iterable_sent.py
+
+      - name: Fetch Poplar sends (last 24h)
+        run: python3 tools/fetch_poplar_status.py --days 1
+
+      - name: Group by client
+        run: python3 tools/group_by_client.py
+
+      - name: Compose messages
+        run: python3 tools/compose_messages.py
+
+      - name: Post to Slack
+        if: ${{ github.event_name == 'schedule' || inputs.post_to_slack == true }}
+        run: python3 tools/post_to_slack.py
