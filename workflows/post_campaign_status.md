@@ -106,36 +106,83 @@ days — that's expected, not a bug (see Edge cases).
    unless the user asks for one later). Formatting matches "Message format"
    above exactly; no judgment calls needed at post time.
 
-5. **Post each composed message to Slack** via
-   `mcp__claude_ai_Slack__slack_send_message` (`channel_id`, `message`),
-   looping over `.tmp/client_messages.json`. If a client has activity but no
-   entry in `tools/client_channels.json`, `compose_messages.py` already
-   flagged it in its printed output — don't skip silently, surface it.
+5. **Post each composed message to Slack.** Two paths depending on context —
+   see "Automation" below for which to use when:
+   - **Live/manual session**: `mcp__claude_ai_Slack__slack_send_message`
+     (`channel_id`, `message`), looping over `.tmp/client_messages.json`.
+   - **Unattended (local cron)**: `python3 tools/post_to_slack.py` — same
+     input file, posts via a Slack bot token instead of MCP.
 
-## Automation status
-This workflow needs to run unattended at 10:00 AM IST, but Slack posting
-goes through the MCP connector (interactive OAuth), and interactively
-authenticated MCP connectors may not be available in headless/scheduled
-agent runs.
+   Either path: if a client has activity but no entry in
+   `tools/client_channels.json`, `compose_messages.py` already flagged it in
+   its printed output — don't skip silently, surface it.
 
-Progress so far (2026-08-04):
-- **Posting mechanics confirmed working** in a live interactive session — a
-  test message was sent to `#dexcom-marketing` via
-  `mcp__claude_ai_Slack__slack_send_message` and landed successfully
-  ([message link](https://3tandai.slack.com/archives/C07465A2T2T/p1785839420562399)).
-  This only proves the MCP connector works *interactively*, not that it
-  survives a headless 10:00 AM cron run — that's still unverified.
-- **The actual 10:00 AM IST schedule is on hold, per explicit instruction**
-  (2026-08-04: "hold off... we'll work on that later") — don't set up
-  `CronCreate`/the scheduling skill for this workflow until the user
-  explicitly asks to resume that work. Until then, this workflow only runs
-  when someone in a live session asks for it.
-- When the schedule does get built: **test empirically** first — set it up,
-  let it fire once, and confirm the Slack posts actually land before
-  trusting it long-term. If posts start silently failing in the scheduled
-  run, the fallback (flagged in CLAUDE.md, not yet built) is a real Slack
-  bot token + `chat.postMessage` instead of the MCP tool — don't switch to
-  that silently, raise it with the user first.
+## Automation
+**Decided 2026-08-04: local cron (`launchd`), not a cloud routine.** A cloud
+routine (`RemoteTrigger`/the scheduling skill) was attempted first but hit
+two blockers: this project wasn't a hosted git repo a cloud sandbox could
+clone, and there was no confirmed way to get `ITERABLE_API_KEY`/
+`POPLAR_API_KEY` into that sandbox without committing them somewhere (never
+acceptable). Local cron sidesteps both — it runs directly on this Mac,
+against the existing `.env`.
+
+**The catch this created**: Slack MCP only works inside a live Claude
+session, and a bare `launchd` job has no LLM/session in the loop at all. So
+the unattended path needed a real fallback — exactly the one flagged (but
+not yet built) earlier in this project: a **Slack bot token +
+`chat.postMessage`**, via `tools/post_to_slack.py`, used *only* for the
+unattended cron path. Live/manual runs in a Claude session still use the
+MCP tool as before (confirmed working via a test post to
+`#dexcom-marketing`,
+[message link](https://3tandai.slack.com/archives/C07465A2T2T/p1785839420562399)).
+
+**Setup pieces:**
+- `tools/run_daily.sh` — chains all 5 steps above (uses the absolute
+  Python path `/opt/homebrew/bin/python3`, since `launchd` doesn't run
+  under a login shell with the normal `PATH`). Logs both stdout/stderr to
+  `.tmp/run.log` (append-only — no LLM is around to surface failures, so
+  check this file if a day's post seems to be missing).
+- `~/Library/LaunchAgents/com.digbihealth.campaign-status-agent.plist` —
+  `StartCalendarInterval` Hour=10 Minute=0. This Mac's system timezone is
+  already `Asia/Kolkata`, confirmed via `/etc/localtime`, so no UTC
+  conversion was needed. Loaded via
+  `launchctl bootstrap gui/<uid> <plist path>`. If it ever needs
+  reloading: `launchctl bootout gui/<uid>/com.digbihealth.campaign-status-agent`
+  then bootstrap again.
+- **`SLACK_BOT_TOKEN` in `.env`** — a bot token (`xoxb-...`) from the
+  "Campaign Status Agent" Slack app (bot user: `campaign_status_agent`).
+  Created 2026-08-05 with scopes `commands, chat:write, app_mentions:read,
+  channels:read, groups:read` (the last two added after the app was first
+  installed, which required a reinstall to take effect — a plain scope
+  edit in the app config does *not* update a token already issued).
+- **The bot has been individually invited into all 22 of the 22 client
+  channels** (`/invite @campaign_status_agent` in each), confirmed
+  2026-08-05 via `conversations.info` per channel (`is_member: true` for
+  all). Slack requires bot membership to post into private channels, and
+  per `slack_search_channels` results from earlier, these are almost all
+  private — for a private channel the bot hasn't joined,
+  `conversations.info` returns `channel_not_found` (not `not_in_channel`),
+  since Slack hides private-channel existence from non-members entirely.
+  `tools/post_to_slack.py` still reports `not_in_channel` per-client
+  rather than aborting the whole run if a channel is ever missed after a
+  future roster addition, so one not-yet-invited channel won't block the
+  others from posting.
+- The local git repo initialized earlier (for the abandoned cloud-routine
+  attempt, intended for `https://github.com/harshal09-458/Campaign-Status-Agent`)
+  is no longer required for automation to work, since local cron doesn't
+  need a hosted repo at all. It's still there as plain local version
+  control if wanted, but the stalled push (blocked on a GitHub account
+  mismatch) is no longer a blocker for anything.
+
+**Confirmed 2026-08-05**: full manual pipeline run, all 5 steps, using
+`tools/post_to_slack.py` (bot token, not MCP) for the post step — 5/22
+clients had activity in the window and all 5 posted successfully
+(City of Fort Worth, Elbit, Dexter, AZLGEBT, RAGHT). This was a real run
+against live Iterable/Poplar data, not a placeholder test.
+
+**Not yet done**: a live end-to-end test of a real cron firing (current
+verification only covers manual invocation of the steps/`run_daily.sh`,
+not `launchd` actually firing it unattended at 10:00 AM).
 
 ## Edge cases
 - **Unmatched sends from `group_by_client.py`** — expected and fine as long
