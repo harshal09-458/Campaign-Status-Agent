@@ -40,6 +40,7 @@ CAMPAIGNS_URL = "https://api.iterable.com/api/campaigns"
 METRICS_URL = "https://api.iterable.com/api/campaigns/metrics"
 BATCH_SIZE = 200
 SENT_COLUMN_RE = re.compile(r"\bsent\b|\bsends\b", re.IGNORECASE)
+ALL_TIME_START = datetime(2000, 1, 1, tzinfo=timezone.utc)
 
 
 def load_env(path: Path) -> dict:
@@ -117,7 +118,13 @@ def pct(numerator, denominator):
         return None
     if den <= 0:
         return None
-    return round(num / den * 100, 1)
+    value = round(num / den * 100, 1)
+    if value > 100:
+        # Shouldn't happen once rates_for() is fed an all-time row (see its
+        # docstring) -- kept as a last-resort guard so a still-impossible
+        # number never reaches Slack rather than silently displaying it.
+        return None
+    return value
 
 
 def rates_for(row: dict, message_medium: str) -> dict:
@@ -129,12 +136,26 @@ def rates_for(row: dict, message_medium: str) -> dict:
     (2026-08-04), the Slack message should omit that line for SMS rather
     than show "N/A".
 
+    IMPORTANT: `row` must come from an ALL-TIME metrics query (see
+    ALL_TIME_START and the second fetch_metrics() call in main()), NOT the
+    rolling reporting window used for `sent_count`/Total Sent. Found 2026-08-20: Iterable's
+    metrics endpoint filters "Unique Email Opens (filtered)" by when the
+    OPEN happened, not when the underlying email was delivered, while
+    "Unique Emails Delivered" is filtered by when the DELIVERY happened.
+    For a campaign whose send batch is aging out of a short rolling window,
+    that mismatch lets the numerator draw from the campaign's whole
+    historical audience while the denominator shrinks toward a handful of
+    stragglers -- producing rates over 100% (confirmed live: a campaign
+    showed 60/94=63.8% on a 24h window and 111/513=21.6% all-time, same
+    campaign, ~same moment). Querying all-time for just the campaigns that
+    already matched the window filter keeps this to one cheap extra call.
+
     SMS click-rate column names are NOT verified against a live SMS send
     (this account had none active when this was written) — found
     defensively by substring match ("sms" + "click" / "sms" + "delivered").
     If this ever returns None for a real SMS campaign, check the raw
-    `metrics` dict in the output JSON for the actual column names and fix
-    the substrings here.
+    `metrics_all_time` dict in the output JSON for the actual column names
+    and fix the substrings here.
     """
     medium = (message_medium or "").lower()
     if medium == "email":
@@ -169,14 +190,23 @@ def main():
     metrics_rows = fetch_metrics(api_key, [c["id"] for c in all_campaigns], window_start, now) if all_campaigns else []
     campaigns_by_id = {c["id"]: c for c in all_campaigns}
 
+    matched = [(int(row["id"]), row, sent_count(row)) for row in metrics_rows]
+    matched = [(cid, row, count) for cid, row, count in matched if count > 0]
+
+    # Rates need an all-time query, not the rolling window -- see rates_for()
+    # docstring. Only for the handful of campaigns that matched above, so
+    # this stays a single cheap extra call rather than doubling the full
+    # ~1150-campaign sweep.
+    rate_rows_by_id = {}
+    if matched:
+        all_time_rows = fetch_metrics(api_key, [cid for cid, _, _ in matched], ALL_TIME_START, now)
+        rate_rows_by_id = {int(r["id"]): r for r in all_time_rows}
+
     sent_campaigns = []
-    for row in metrics_rows:
-        count = sent_count(row)
-        if count <= 0:
-            continue
-        campaign_id = int(row["id"])
+    for campaign_id, row, count in matched:
         campaign = campaigns_by_id.get(campaign_id, {})
         medium = campaign.get("messageMedium")
+        rate_row = rate_rows_by_id.get(campaign_id, row)
         sent_campaigns.append(
             {
                 "id": campaign_id,
@@ -184,8 +214,9 @@ def main():
                 "campaignState": campaign.get("campaignState"),
                 "messageMedium": medium,
                 "sent_count": count,
-                **rates_for(row, medium),
+                **rates_for(rate_row, medium),
                 "metrics": row,
+                "metrics_all_time": rate_row,
             }
         )
 
