@@ -110,8 +110,8 @@ days — that's expected, not a bug (see Edge cases).
    see "Automation" below for which to use when:
    - **Live/manual session**: `mcp__claude_ai_Slack__slack_send_message`
      (`channel_id`, `message`), looping over `.tmp/client_messages.json`.
-   - **Unattended (local cron)**: `python3 tools/post_to_slack.py` — same
-     input file, posts via a Slack bot token instead of MCP.
+   - **Unattended (GitHub Actions cron)**: `python3 tools/post_to_slack.py`
+     — same input file, posts via a Slack bot token instead of MCP.
 
    Either path: if a client has activity but no entry in
    `tools/client_channels.json`, `compose_messages.py` already flagged it in
@@ -180,9 +180,41 @@ clients had activity in the window and all 5 posted successfully
 (City of Fort Worth, Elbit, Dexter, AZLGEBT, RAGHT). This was a real run
 against live Iterable/Poplar data, not a placeholder test.
 
-**Not yet done**: a live end-to-end test of a real cron firing (current
-verification only covers manual invocation of the steps/`run_daily.sh`,
-not `launchd` actually firing it unattended at 10:00 AM).
+**Superseded 2026-08-19: moved from local `launchd` to GitHub Actions.**
+The repo is now pushed to GitHub
+(`github.com/harshal09-458/Campaign-Status-Agent`), which removes the
+original blocker that ruled out a cloud routine — and since
+`tools/post_to_slack.py` already posts via a bot token (not MCP), there
+was no live-Claude-session dependency left to work around either. The
+daily run now happens on GitHub's own servers, independent of whether the
+local Mac is on:
+- `.github/workflows/daily-campaign-status.yml` — runs steps 1–5 on a
+  `schedule: cron: '30 4 * * *'` (04:30 UTC = 10:00 AM IST), plus
+  `workflow_dispatch` for manual triggers (with a `post_to_slack` boolean
+  input — set `false` to dry-run steps 1–4 without posting, useful for
+  testing without duplicating a day's real Slack messages).
+- Credentials (`ITERABLE_API_KEY`, `POPLAR_API_KEY`, `SLACK_BOT_TOKEN`)
+  live as encrypted GitHub Actions repo secrets (`gh secret set`), written
+  to a runtime `.env` at the start of each run. The tools' existing
+  `load_env()` already just reads a plain `.env` file, so no tool code
+  changes were needed to support this.
+- The local `launchd` job was unloaded (`launchctl bootout
+  gui/<uid>/com.digbihealth.campaign-status-agent`) to avoid duplicate
+  Slack posts from both paths firing. The plist and `tools/run_daily.sh`
+  are left in place, not deleted, in case local cron is ever wanted again.
+- **Caveats**: GitHub's scheduled triggers are best-effort and can fire a
+  few minutes late under load — not a bug. Also, GitHub auto-disables a
+  scheduled workflow after **60 days of zero repo activity** (no commits)
+  — needs a commit or a manual re-enable in the Actions tab if this repo
+  ever goes dormant that long. GitHub does email the repo owner
+  automatically when a scheduled run *fails*, but that's the only
+  built-in alerting — nothing watches for the 60-day silent disable.
+
+**First real scheduled firing, 2026-08-20 05:03 UTC: failed** — Poplar
+rate-limited the run (see "Poplar + Cloudflare rate limiting" under Known
+API quirks below). Fixed the same day and verified by re-running the
+tools manually against live data; not yet re-confirmed by an actual
+subsequent scheduled firing.
 
 ## Edge cases
 - **Unmatched sends from `group_by_client.py`** — expected and fine as long
@@ -252,6 +284,27 @@ not `launchd` actually firing it unattended at 10:00 AM).
   click_rate_pct, check the raw `metrics` dict in `iterable_sent.json` for
   the actual column names and fix the substrings in
   `tools/fetch_iterable_sent.py`.
+  - **Update 2026-08-20**: this per-window formula turned out to be unsafe
+    for the rates specifically (`sent_count`/Total Sent is fine) once a
+    campaign's send batch starts aging out of the rolling window.
+    Iterable's metrics endpoint filters *opens/clicks* by when the
+    open/click event happened, but filters *deliveries* by when the
+    delivery happened — so as window-scoped deliveries shrink toward a
+    handful of stragglers, window-scoped opens keep drawing from the
+    campaign's entire historical audience, and the ratio can exceed 100%
+    (a real campaign hit 728.6% today, caught before it reached Slack).
+    Fix: `tools/fetch_iterable_sent.py` now runs a **second, all-time
+    metrics query** (`ALL_TIME_START = 2000-01-01`), limited to just the
+    campaigns that already matched the rolling-window "sent > 0" filter,
+    and computes `open_rate_pct`/`click_rate_pct` from that all-time row
+    instead — Total Sent still comes from the rolling window, since
+    that's genuinely "what happened today." Verified against the campaign
+    that broke: 60/94=63.8% on the narrow window vs. 111/513=21.6%
+    all-time; the tool now reports 21.6%. The all-time row is saved in
+    the output JSON as `metrics_all_time` (the window-scoped row is still
+    `metrics`, now used only for `sent_count`) — check *that* dict, not
+    `metrics`, when chasing a column-name issue for a new medium. Also
+    added a `>100%` guard in `pct()` as a last-resort safety net.
 - **Poplar auth**: `Authorization: Bearer <token>` header.
 - **Poplar has no "list all mailings" endpoint** — go
   `GET /v1/campaigns` (active campaigns, id+name only) →
@@ -265,6 +318,23 @@ not `launchd` actually firing it unattended at 10:00 AM).
   actually triggering a mailing (`POST /v1/mailing`). The status-fetch tool
   never calls that endpoint, so it's safe to run anytime without checking
   in first.
+- **Poplar + Cloudflare rate limiting (429)**: found 2026-08-20, on the
+  first real GitHub Actions scheduled run — hitting all 139 active
+  campaigns' mailings endpoints back-to-back with no delay between
+  requests tripped Cloudflare's rate limiter (`error 1015`) partway
+  through, killing the whole pipeline before any Slack post went out.
+  This is a separate Cloudflare protection from the User-Agent block
+  above (that one blocks on every request regardless of rate; this one
+  only trips under request volume/speed). Fixed in
+  `tools/fetch_poplar_status.py`: a 0.3s pacing delay between each
+  campaign's request, plus retry-with-backoff specifically on 429
+  (honors the `retry_after` value Cloudflare's own error body suggests,
+  up to 5 attempts, doubling each retry). This ran fine locally before
+  the fix — GitHub's runners apparently hit the API faster/differently
+  than this Mac's network path did — so "works when I run it locally"
+  doesn't guarantee it'll survive an unattended run; if in doubt, test
+  via `workflow_dispatch` with `post_to_slack: false` (see Automation
+  above) rather than assuming.
 
 ## Output
 The Slack messages are the deliverable. `.tmp/*.json` files are disposable
