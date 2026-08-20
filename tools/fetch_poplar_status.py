@@ -28,6 +28,7 @@ Known `state` values (from Poplar docs/webhooks):
 
 import argparse
 import json
+import time
 import urllib.error
 import urllib.request
 from datetime import datetime, timedelta, timezone
@@ -39,6 +40,8 @@ DEFAULT_OUTPUT = PROJECT_ROOT / ".tmp" / "poplar_status.json"
 
 BASE_URL = "https://api.heypoplar.com/v1"
 PER_PAGE = 100
+MAX_RATE_LIMIT_RETRIES = 5
+DEFAULT_RETRY_AFTER_SECONDS = 30
 
 
 def load_env(path: Path) -> dict:
@@ -68,15 +71,26 @@ def api_get(path: str, api_key: str, params: dict | None = None):
             "Accept": "application/json",
         },
     )
-    try:
-        with urllib.request.urlopen(request, timeout=30) as response:
-            body = json.loads(response.read().decode("utf-8"))
-            return body, response.headers
-    except urllib.error.HTTPError as e:
-        detail = e.read().decode("utf-8", errors="replace")
-        raise SystemExit(f"Poplar API error {e.code} for {url}: {detail}")
-    except urllib.error.URLError as e:
-        raise SystemExit(f"Failed to reach Poplar API: {e.reason}")
+    wait_seconds = DEFAULT_RETRY_AFTER_SECONDS
+    for attempt in range(1, MAX_RATE_LIMIT_RETRIES + 2):
+        try:
+            with urllib.request.urlopen(request, timeout=30) as response:
+                body = json.loads(response.read().decode("utf-8"))
+                return body, response.headers
+        except urllib.error.HTTPError as e:
+            detail = e.read().decode("utf-8", errors="replace")
+            if e.code == 429 and attempt <= MAX_RATE_LIMIT_RETRIES:
+                try:
+                    wait_seconds = json.loads(detail).get("retry_after", wait_seconds)
+                except (json.JSONDecodeError, AttributeError):
+                    pass
+                print(f"  Poplar rate-limited (attempt {attempt}/{MAX_RATE_LIMIT_RETRIES}), waiting {wait_seconds}s before retry...")
+                time.sleep(wait_seconds)
+                wait_seconds *= 2
+                continue
+            raise SystemExit(f"Poplar API error {e.code} for {url}: {detail}")
+        except urllib.error.URLError as e:
+            raise SystemExit(f"Failed to reach Poplar API: {e.reason}")
 
 
 def fetch_active_campaigns(api_key: str) -> list:
@@ -126,7 +140,9 @@ def main():
 
     campaigns = fetch_active_campaigns(api_key)
     results = []
-    for campaign in campaigns:
+    for i, campaign in enumerate(campaigns):
+        if i > 0:
+            time.sleep(0.3)
         campaign_id = campaign.get("id")
         mailings = fetch_campaign_mailings(api_key, campaign_id, start_date, end_date)
         results.append(
